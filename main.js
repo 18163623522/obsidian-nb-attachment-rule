@@ -4,8 +4,9 @@
  * 功能 1 附件放置规则：
  *   在「笔记」文件夹下的 .md 里粘贴/拖入附件 → 存到 <笔记>/附件/<笔记名>/
  *   在「白板」文件夹下的 .canvas 里粘贴/拖入附件 → 存到 <白板>/附件/<白板名>/
- *   实现方式：动态接管 Obsidian 保存附件时读取的 attachmentFolderPath 配置，
- *   按当前活动文件的类型与所在祖先文件夹计算目标路径（Obsidian 会自动创建缺失的层级）。
+ *   实现方式：以实例属性遮蔽原型方法的方式接管 Obsidian 保存附件时读取的
+ *   attachmentFolderPath 配置，按当前活动文件的类型与所在祖先文件夹计算目标路径
+ *   （Obsidian 会自动创建缺失的层级）。不依赖 around/monkey-around（1.14.5 不再导出）。
  *
  * 功能 2 附件文件夹置底：
  *   文件管理器中，名为「附件」的文件夹固定排在所在文件夹列表的最后。
@@ -22,7 +23,6 @@ const {
   Setting,
   TFolder,
   TFile,
-  around,
   normalizePath,
 } = require("obsidian");
 
@@ -58,16 +58,23 @@ module.exports = class NbAttachmentRulePlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 
     // ---------- 功能 1：接管附件保存路径 ----------
+    // 以实例属性遮蔽原型方法（不依赖 around）；卸载时还原
     const plugin = this;
-    this.uninstallConfigPatch = around(this.app.vault, "getConfig", function (old) {
-      return function (key) {
-        if (key === "attachmentFolderPath") {
-          const computed = plugin.computeAttachmentFolder();
-          if (computed !== null) return computed;
-        }
-        return old.call(this, key);
-      };
-    });
+    const vault = this.app.vault;
+    const hadOwn = Object.prototype.hasOwnProperty.call(vault, "getConfig");
+    const rawOld = vault.getConfig;
+    const oldGetConfig = hadOwn ? rawOld : rawOld.bind(vault);
+    vault.getConfig = function (key) {
+      if (key === "attachmentFolderPath") {
+        const computed = plugin.computeAttachmentFolder();
+        if (computed !== null) return computed;
+      }
+      return oldGetConfig(key);
+    };
+    this.uninstallConfigPatch = function () {
+      if (hadOwn) vault.getConfig = rawOld;
+      else delete vault.getConfig;
+    };
 
     // ---------- 功能 3：粘贴图片自动重命名 ----------
     this.registerEvent(
@@ -168,25 +175,27 @@ module.exports = class NbAttachmentRulePlugin extends Plugin {
       return;
     }
     const plugin = this;
-    this.uninstallSortPatch = around(proto, "getSortedFolderItems", function (old) {
-      return function (folder) {
-        const items = old.call(this, folder);
-        try {
-          const attName = plugin.settings.attachmentFolderName;
-          const isAttachment = (it) => {
-            const f = it && (it.file !== undefined ? it.file : it);
-            return f instanceof TFolder && f.name === attName;
-          };
-          const attachments = items.filter(isAttachment);
-          if (attachments.length > 0) {
-            return items.filter((it) => !isAttachment(it)).concat(attachments);
-          }
-        } catch (e) {
-          console.warn("[笔记白板附件规则] 排序补丁异常", e);
+    const oldSorted = proto.getSortedFolderItems;
+    proto.getSortedFolderItems = function (folder) {
+      const items = oldSorted.call(this, folder);
+      try {
+        const attName = plugin.settings.attachmentFolderName;
+        const isAttachment = (it) => {
+          const f = it && (it.file !== undefined ? it.file : it);
+          return f instanceof TFolder && f.name === attName;
+        };
+        const attachments = items.filter(isAttachment);
+        if (attachments.length > 0) {
+          return items.filter((it) => !isAttachment(it)).concat(attachments);
         }
-        return items;
-      };
-    });
+      } catch (e) {
+        console.warn("[笔记白板附件规则] 排序补丁异常", e);
+      }
+      return items;
+    };
+    this.uninstallSortPatch = function () {
+      proto.getSortedFolderItems = oldSorted;
+    };
     this.patchedExplorerProtos.add(proto);
   }
 };
