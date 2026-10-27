@@ -27,6 +27,7 @@ const {
 } = require("obsidian");
 
 const DEFAULT_SETTINGS = {
+  overridePlacement: true,
   noteFolderName: "笔记",
   canvasFolderName: "白板",
   attachmentFolderName: "附件",
@@ -58,23 +59,26 @@ module.exports = class NbAttachmentRulePlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 
     // ---------- 功能 1：接管附件保存路径 ----------
-    // 以实例属性遮蔽原型方法（不依赖 around）；卸载时还原
+    // 以实例属性遮蔽原型方法（不依赖 around）；卸载时还原。
+    // overridePlacement=false 时完全不接管，官方设置原样生效。
     const plugin = this;
     const vault = this.app.vault;
-    const hadOwn = Object.prototype.hasOwnProperty.call(vault, "getConfig");
-    const rawOld = vault.getConfig;
-    const oldGetConfig = hadOwn ? rawOld : rawOld.bind(vault);
-    vault.getConfig = function (key) {
-      if (key === "attachmentFolderPath") {
-        const computed = plugin.computeAttachmentFolder();
-        if (computed !== null) return computed;
-      }
-      return oldGetConfig(key);
-    };
-    this.uninstallConfigPatch = function () {
-      if (hadOwn) vault.getConfig = rawOld;
-      else delete vault.getConfig;
-    };
+    if (typeof vault.getConfig === "function") {
+      const hadOwn = Object.prototype.hasOwnProperty.call(vault, "getConfig");
+      const rawOld = vault.getConfig;
+      const oldGetConfig = hadOwn ? rawOld : rawOld.bind(vault);
+      vault.getConfig = function (key) {
+        if (plugin.settings.overridePlacement && key === "attachmentFolderPath") {
+          const computed = plugin.computeAttachmentFolder();
+          if (computed !== null) return computed;
+        }
+        return oldGetConfig(key);
+      };
+      this.uninstallConfigPatch = function () {
+        if (hadOwn) vault.getConfig = rawOld;
+        else delete vault.getConfig;
+      };
+    }
 
     // ---------- 功能 3：粘贴图片自动重命名 ----------
     this.registerEvent(
@@ -210,6 +214,16 @@ class NbAttachmentRuleSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "笔记白板附件规则" });
+
+    new Setting(containerEl)
+      .setName("接管附件存放位置")
+      .setDesc("开启后：在 笔记/白板 内粘贴的附件存入对应的 附件/<文件名>/ 子文件夹。关闭后：完全不干预，使用 Obsidian 官方设置（文件与链接 → 附件默认路径）")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.overridePlacement).onChange(async (v) => {
+          this.plugin.settings.overridePlacement = v;
+          await this.plugin.saveData(this.plugin.settings);
+        })
+      );
 
     new Setting(containerEl)
       .setName("笔记文件夹名")
