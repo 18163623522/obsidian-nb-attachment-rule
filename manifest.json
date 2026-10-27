@@ -1,0 +1,9 @@
+{
+	"id": "nb-attachment-rule",
+	"name": "笔记白板附件规则",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "粘贴或拖入附件时，自动存入所属 笔记/白板 文件夹下的 附件/<当前文件名>/ 子文件夹；并可将 附件 文件夹固定在文件管理器列表末尾。",
+	"author": "pengxiwei",
+	"isDesktopOnly": false
+}
